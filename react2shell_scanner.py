@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+import os
 import json
 import argparse
 import requests
@@ -152,15 +153,31 @@ def create_check_payload_l_type(action_id: str) -> Tuple[str, str]:
     return body, content_type
 
 
-def analyze_response(response_text: str, status_code: int) -> CheckResult:
+def create_check_payload_third() -> Tuple[str, str]:
+    boundary = "----WebKitFormBoundaryx8jO2oVc6SWP3Sad"
+    body = (
+        f"------WebKitFormBoundaryx8jO2oVc6SWP3Sad\r\n"
+        f'Content-Disposition: form-data; name="1"\r\n\r\n'
+        f"{{}}\r\n"
+        f"------WebKitFormBoundaryx8jO2oVc6SWP3Sad\r\n"
+        f'Content-Disposition: form-data; name="0"\r\n\r\n'
+        f'["$1:aa:aa"]\r\n'
+        f"------WebKitFormBoundaryx8jO2oVc6SWP3Sad--"
+    )
+    content_type = f"multipart/form-data; boundary={boundary}"
+    return body, content_type
+
+
+def analyze_response(response_text: str, status_code: int, content_type: str = "") -> CheckResult:
     text_lower = response_text.lower()
+    content_type_lower = content_type.lower()
     
     # Check for patched signatures first
     for sig in PATCHED_SIGNATURES:
         if sig.lower() in text_lower:
             return CheckResult(
-                status=VulnStatus.NOT_VULNERABLE,
-                confidence="HIGH",
+                status=VulnStatus.UNKNOWN,
+                confidence="MEDIUM",
                 evidence=sig,
                 details="Server rejected payload with security error (patched)"
             )
@@ -175,17 +192,28 @@ def analyze_response(response_text: str, status_code: int) -> CheckResult:
                 details=sig_info["description"]
             )
     
-    # 500/501 errors often indicate the vulnerable code path was reached
-    # even if the specific signature isn't in the response body
+    # 500/501 errors - only flag as vulnerable if we can confirm it's a React Flight response
     if status_code in [500, 501]:
-        # Check for generic error indicators
-        if "error" in text_lower or "typeerror" in text_lower or "digest" in text_lower:
+        # Verify we're talking to an RSC endpoint
+        is_rsc_response = False
+        
+        # Check Content-Type header
+        if "text/x-component" in content_type_lower:
+            is_rsc_response = True
+        
+        # Check for React Flight error envelope patterns in body
+        # E{"digest":...} or S{"id":...} are React Flight error formats
+        if 'e{"digest"' in text_lower or 's{"id"' in text_lower:
+            is_rsc_response = True
+        
+        if is_rsc_response:
             return CheckResult(
                 status=VulnStatus.VULNERABLE,
                 confidence="MEDIUM",
-                evidence=f"HTTP {status_code} with error response",
+                evidence=f"HTTP {status_code} with React Flight error response",
                 details="Server error during Flight deserialization (likely vulnerable)"
             )
+        
         return CheckResult(
             status=VulnStatus.UNKNOWN,
             confidence="MEDIUM",
@@ -216,7 +244,7 @@ def check_vulnerability(target_url: str, action_id: str, verbose: bool = False) 
     """
     # Ensure URL ends without trailing slash for consistency
     target_url = target_url.rstrip('/')
-    
+    Fatal_error = False
     # Standard headers for Server Action request
     router_state = '%5B%22%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2C%22%2F%22%2C%22refresh%22%5D%7D%2Cnull%2Cnull%2Ctrue%5D'
     
@@ -252,7 +280,8 @@ def check_vulnerability(target_url: str, action_id: str, verbose: bool = False) 
         if verbose:
             print(f"    Response Body: {response.text[:300]}...")
         
-        result = analyze_response(response.text, response.status_code)
+        content_type = response.headers.get("Content-Type", "")
+        result = analyze_response(response.text, response.status_code, content_type)
         results.append(("$F type", result))
         print(f"    Status: {response.status_code}, Evidence: {result.evidence}")
         
@@ -262,13 +291,11 @@ def check_vulnerability(target_url: str, action_id: str, verbose: bool = False) 
         # Continue to other tests even if this one says NOT_VULNERABLE
             
     except requests.exceptions.Timeout:
-        print("    Timeout")
-        results.append(("$F type", CheckResult(
-            status=VulnStatus.VULNERABLE,
-            confidence="MEDIUM",
-            evidence="Timeout",
-            details="Request timed out"
-        )))
+        print("[!] Fatal error: timeout cant verify vulnerability")
+        Fatal_error = True
+    except (requests.exceptions.ConnectionError, requests.exceptions.RequestException) as e:
+        print(f"[!] Fatal error: connection error - {e}")
+        Fatal_error = True
     except Exception as e:
         print(f"    Error: {e}")
         results.append(("$F type", CheckResult(
@@ -277,7 +304,8 @@ def check_vulnerability(target_url: str, action_id: str, verbose: bool = False) 
             evidence=str(e),
             details="Connection error"
         )))
-    
+    if Fatal_error:
+        exit(1)
     # Test 2: $L type payload
     print("[*] Test 2: Sending $L (Lazy) payload...")
     body, content_type = create_check_payload_l_type(action_id)
@@ -295,7 +323,8 @@ def check_vulnerability(target_url: str, action_id: str, verbose: bool = False) 
         if verbose:
             print(f"    Response Body: {response.text[:300]}...")
         
-        result = analyze_response(response.text, response.status_code)
+        content_type = response.headers.get("Content-Type", "")
+        result = analyze_response(response.text, response.status_code, content_type)
         results.append(("$L type", result))
         print(f"    Status: {response.status_code}, Evidence: {result.evidence}")
         
@@ -305,17 +334,67 @@ def check_vulnerability(target_url: str, action_id: str, verbose: bool = False) 
         # Continue to aggregation even if this one says NOT_VULNERABLE
             
     except requests.exceptions.Timeout:
-        print("    Timeout")
-        results.append(("$L type", CheckResult(
-            status=VulnStatus.UNKNOWN,
-            confidence="LOW",
-            evidence="Timeout",
-            details="Request timed out"
-        )))
+        print("[!] Fatal error: timeout cant verify vulnerability")
+        Fatal_error = True
+    except (requests.exceptions.ConnectionError, requests.exceptions.RequestException) as e:
+        print(f"[!] Fatal error: connection error - {e}")
+        Fatal_error = True
     except Exception as e:
         print(f"    Error: {e}")
+    if Fatal_error:
+        exit(1)
+    for test_name, result in results:
+        if result.status == VulnStatus.VULNERABLE:
+            return result
     
-    # Aggregate results - prioritize VULNERABLE, then NOT_VULNERABLE
+    print("[*] Test 3: Sending third payload...")
+    body, content_type = create_check_payload_third()
+    headers["Content-Type"] = content_type
+    headers["Next-Action"] = "x"
+    headers["X-Nextjs-Request-Id"] = "b5dce965"
+    headers["X-Nextjs-Html-Request-Id"] = "SSTMXm7OJ_g0Ncx6jpQt9"
+    
+    try:
+        response = requests.post(
+            f"{target_url}/",
+            data=body,
+            headers=headers,
+            timeout=15,
+            verify=False
+        )
+        
+        if verbose:
+            print(f"    Response Body: {response.text[:300]}...")
+        
+        if response.status_code == 500 and 'E{"digest"' in response.text:
+            result = CheckResult(
+                status=VulnStatus.VULNERABLE,
+                confidence="HIGH",
+                evidence="HTTP 500 with E{\"digest\"",
+                details="Server error with React Flight error envelope"
+            )
+            results.append(("Third test", result))
+            print(f"    Status: {response.status_code}, Evidence: {result.evidence}")
+            return result
+        
+        content_type_header = response.headers.get("Content-Type", "")
+        result = analyze_response(response.text, response.status_code, content_type_header)
+        results.append(("Third test", result))
+        print(f"    Status: {response.status_code}, Evidence: {result.evidence}")
+        
+        if result.status == VulnStatus.VULNERABLE:
+            return result
+            
+    except requests.exceptions.Timeout:
+        print("[!] Fatal error: timeout cant verify vulnerability")
+        Fatal_error = True
+    except (requests.exceptions.ConnectionError, requests.exceptions.RequestException) as e:
+        print(f"[!] Fatal error: connection error - {e}")
+        Fatal_error = True
+    except Exception as e:
+        print(f"    Error: {e}")
+    if Fatal_error:
+        exit(1)
     for test_name, result in results:
         if result.status == VulnStatus.VULNERABLE:
             return result
@@ -324,21 +403,11 @@ def check_vulnerability(target_url: str, action_id: str, verbose: bool = False) 
         if result.status == VulnStatus.NOT_VULNERABLE:
             return result
     
-    # If we got 500/501 errors, lean towards vulnerable
-    for test_name, result in results:
-        if "500" in result.evidence or "501" in result.evidence:
-            return CheckResult(
-                status=VulnStatus.VULNERABLE,
-                confidence="MEDIUM",
-                evidence=result.evidence,
-                details="Server errors during Flight deserialization indicate vulnerability"
-            )
-    
     return CheckResult(
-        status=VulnStatus.UNKNOWN,
-        confidence="LOW",
+        status=VulnStatus.NOT_VULNERABLE,
+        confidence="MEDIUM",
         evidence="No definitive signatures",
-        details="Could not determine vulnerability status"
+        details="Likely not vulnerable"
     )
 
 
