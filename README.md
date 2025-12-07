@@ -19,7 +19,7 @@ This tool performs **active vulnerability detection** by:
 2. **Analyzing error responses** for unique signatures that indicate whether the vulnerable or patched code path was reached
 3. **Providing confidence levels** (HIGH, MEDIUM, LOW) based on the evidence found
 
-The tool uses two detection methods:
+The tool uses three detection methods:
 - **$F type (Server Reference)**: Tests the `loadServerReference` code path
 - **$L type (Lazy)**: Tests the `arrayBuffer` code path
 - The assetnote's detection method
