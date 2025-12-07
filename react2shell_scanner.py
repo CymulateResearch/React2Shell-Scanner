@@ -27,13 +27,13 @@ class CheckResult:
 VULN_SIGNATURES = {
     # $F type - loadServerReference path
     "workers": {
-        "pattern": "workers",
+        "pattern": "Cannot read properties of undefined (reading 'workers')",
         "confidence": "HIGH",
         "description": "Server reached loadServerReference (Flight $F deserialization bypass)"
     },
     # $L type - arrayBuffer path  
     "arraybuffer": {
-        "pattern": "arraybuffer",
+        "pattern": "reference.arrayBuffer",
         "confidence": "HIGH", 
         "description": "Server reached $L type handler (Flight deserialization bypass)"
     },
@@ -46,13 +46,13 @@ VULN_SIGNATURES = {
     # Type confusion (action invoked with wrong type)
     "entries": {
         "pattern": "entries",
-        "confidence": "MEDIUM",
+        "confidence": "LOW",
         "description": "Server Action received deserialized object instead of FormData"
     },
     # Temporary reference error
     "temporary_client": {
         "pattern": "temporary client reference",
-        "confidence": "MEDIUM",
+        "confidence": "LOW",
         "description": "Server processed $T type reference"
     }
 }
