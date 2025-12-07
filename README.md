@@ -22,6 +22,7 @@ This tool performs **active vulnerability detection** by:
 The tool uses two detection methods:
 - **$F type (Server Reference)**: Tests the `loadServerReference` code path
 - **$L type (Lazy)**: Tests the `arrayBuffer` code path
+- The assetnote's detection method
 
 **Important**: This tool does NOT execute any malicious code. It only sends carefully crafted benign payloads designed to trigger error responses that reveal the server's vulnerability status.
 
